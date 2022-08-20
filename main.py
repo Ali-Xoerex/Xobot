@@ -1,5 +1,7 @@
 #!/usr/bin/python
 
+import time
+import threading
 import pickle
 import sqlite3
 import datetime
@@ -8,16 +10,26 @@ from telegram import Update , InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CallbackContext, CommandHandler, CallbackQueryHandler, MessageHandler, Filters
 
 months = {"January": 1, "February":2, "March": 3, "April":4, "May": 5, "June": 6, "July":7, "August":8, "September":9, "October":10, "November":11, "December": 12}
-request_kargs = {"proxy_url":"http://127.0.0.1:50886"} # Hard-coded only for test
+request_kargs = {"proxy_url":"http://127.0.0.1:57926"} # Hard-coded only for test
 
 updater = Updater(token="5652106016:AAFUm4917Re2TmHpL1IZc1lPGgmPv49K3Cg", request_kwargs=request_kargs)
 
 dispatcher = updater.dispatcher
 
+def tick_until_finish(dateobj,objid,title,chatid):
+    secs = (dateobj - datetime.datetime.now()).seconds
+    time.sleep(secs)
+    db = sqlite3.connect("xobot.db")
+    cur = db.cursor()
+    cur.execute("DELETE FROM Tasks WHERE id={}".format(objid))
+    db.commit()
+    db.close()
+    updater.bot.send_message(chat_id=chatid,text="The due date of following task has been reached\nTitle: {}\nDue:{}".format(title,dateobj))
+
 def setup():
     db = sqlite3.connect("xobot.db")
     cur = db.cursor()
-    cur.execute("CREATE TABLE IF NOT EXISTS Tasks (User INTEGER, Title TEXT, dateobj BLOB)")
+    cur.execute("CREATE TABLE IF NOT EXISTS Tasks (User INTEGER, id INTEGER, Title TEXT, dateobj BLOB)")
     db.commit()
     db.close()
 
@@ -45,7 +57,7 @@ def show_tasks(update,context):
     cur.execute("SELECT * FROM Tasks WHERE User={}".format(update.effective_user.id))
     results = cur.fetchall()
     for result in results:
-        context.bot.send_message(chat_id=update.effective_chat.id, text="Title: {}\n Due Date: {}".format(result[1],pickle.loads(result[2])))
+        context.bot.send_message(chat_id=update.effective_chat.id, text="Title: {}\n Due Date: {}".format(result[2],pickle.loads(result[3])))
     if not context.user_data.get("state"):
         context.bot.send_message(chat_id=update.effective_chat.id, text="You pressed show button")
 
@@ -67,9 +79,11 @@ def text_handler(update,context):
             due_month = months[due_date[2]]
             due_year = int(due_date[3])
             due = datetime.datetime(due_year,due_month,due_day,hour=due_hour,minute=due_minute)
-            cur.execute("INSERT INTO Tasks VALUES (?,?,?)",(update.effective_user.id,context.user_data["task"]["title"],pickle.dumps(due)))
+            cur.execute("INSERT INTO Tasks VALUES (?,?,?,?)",(update.effective_user.id,hash(due),context.user_data["task"]["title"],pickle.dumps(due)))
             db.commit()
             db.close()
+            task_thread = threading.Thread(target=tick_until_finish,args=(due,hash(due),context.user_data["task"]["title"],update.effective_chat.id))
+            task_thread.start()
             context.user_data.pop("state")
             context.user_data.pop("task")
             context.bot.send_message(chat_id=update.effective_chat.id, text="Task created with ID {}".format(hash(due)))
