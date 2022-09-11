@@ -7,6 +7,7 @@ import concurrent.futures
 import pickle
 import sqlite3
 import datetime
+import calendar
 
 from telegram import Update , InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CallbackContext, CommandHandler, CallbackQueryHandler, MessageHandler, Filters
@@ -77,7 +78,12 @@ def define_task(update,context):
     if not context.user_data.get("state"):
         context.user_data["state"] = "define_title"
         context.user_data["task"] = {}
-        context.bot.send_message(chat_id=update.effective_chat.id, text="Let's create new Task\n What would be the title?")    
+        context.bot.send_message(chat_id=update.effective_chat.id, text="Let's create new Task\n What would be the title?")
+
+def inactive_buttons(update,context):
+    query = update.callback_query
+    print(query.data)
+    query.answer()
 
 def show_tasks(update,context):
     db = sqlite3.connect("xobot.db")
@@ -91,24 +97,75 @@ def show_tasks(update,context):
     if not context.user_data.get("state"):
         context.bot.send_message(chat_id=update.effective_chat.id, text="You pressed show button")
 
+def calendar_markup(y,m):
+    monthstr = calendar.TextCalendar()
+    monthstr = monthstr.formatmonth(y,m)
+    monthstr = monthstr.split("\n")
+    monthstr = [i.strip() for i in monthstr]
+    first = [InlineKeyboardButton("<",callback_data="previous"),InlineKeyboardButton(monthstr[0],callback_data="None"),InlineKeyboardButton(">",callback_data="next")]
+    second = [InlineKeyboardButton(mnth,callback_data="None") for mnth in monthstr[1].split()]
+    m2 = monthstr[2].split()
+    zeros = ["0" for i in range(7-len(m2))]
+    m2 = zeros + m2
+    m3 = monthstr[3].split()
+    m4 = monthstr[4].split()
+    m5 = monthstr[5].split()
+    monthstr[6] = monthstr[6].split()
+    zeros = ["0" for i in range(7-len(monthstr[6]))]
+    m6 = monthstr[6] + zeros
+    m2 = [InlineKeyboardButton(i,callback_data="d{}".format(i)) if i != "0" else InlineKeyboardButton("-",callback_data="None") for i in m2]
+    m3 = [InlineKeyboardButton(i,callback_data="d{}".format(i)) if i != "0" else InlineKeyboardButton("-",callback_data="None") for i in m3]
+    m4 = [InlineKeyboardButton(i,callback_data="d{}".format(i)) if i != "0" else InlineKeyboardButton("-",callback_data="None") for i in m4]
+    m5 = [InlineKeyboardButton(i,callback_data="d{}".format(i)) if i != "0" else InlineKeyboardButton("-",callback_data="None") for i in m5]
+    m6 = [InlineKeyboardButton(i,callback_data="d{}".format(i)) if i != "0" else InlineKeyboardButton("-",callback_data="None") for i in m6]
+    keyboard = [first,second,m2,m3,m4,m5,m6]
+    return keyboard
+
+def pick_date(update,context):
+    query = update.callback_query
+    context.user_data["date"]["day"] = query.data.replace("d","")
+    context.bot.send_message(chat_id=update.effective_chat.id,text="Great!\n What time will it end? (24-hour format e.g 13:14)")
+    context.user_data["state"] = "define_time"
+    query.answer()   
+
+def back_calendar(update,context):
+    query = update.callback_query
+    query.answer()
+    month = context.user_data["date"]["month"]
+    if month - 1 < 1:
+        context.user_data["date"]["month"] = 12
+        context.user_data["date"]["year"] -= 1
+    else:
+        context.user_data["date"]["month"] -= 1
+    k = calendar_markup(context.user_data["date"]["year"],context.user_data["date"]["month"])    
+    context.bot.edit_message_reply_markup(chat_id=update.effective_chat.id,reply_markup=InlineKeyboardMarkup(k),message_id=context.user_data["last_markup_id"])
+
+def forward_calendar(update,context):
+    query = update.callback_query
+    query.answer()
+    month = context.user_data["date"]["month"]
+    if month + 1 > 12:
+        context.user_data["date"]["month"] = 1
+        context.user_data["date"]["year"] += 1
+    else:
+        context.user_data["date"]["month"] += 1
+    k = calendar_markup(context.user_data["date"]["year"],context.user_data["date"]["month"])    
+    context.bot.edit_message_reply_markup(chat_id=update.effective_chat.id,reply_markup=InlineKeyboardMarkup(k),message_id=context.user_data["last_markup_id"])
+
 def text_handler(update,context):
     db = sqlite3.connect("xobot.db")
     cur = db.cursor()
     state = context.user_data.get("state")
     if state:
         if state == "define_title":
+            now = datetime.datetime.now()
+            k = calendar_markup(now.year,now.month)
             context.user_data["task"]["title"] = update.message.text
-            context.bot.send_message(chat_id=update.effective_chat.id, text="Got it!\nNow tell me when is it due?")
-            context.user_data["state"] = "define_due"
-        if state == "define_due":
-            due_date = update.message.text.split(" ")
-            due_time = due_date[0].split(":")
-            due_hour = int(due_time[0])
-            due_minute = int(due_time[1])
-            due_day = int(due_date[1])
-            due_month = months[due_date[2]]
-            due_year = int(due_date[3])
-            due = datetime.datetime(due_year,due_month,due_day,hour=due_hour,minute=due_minute)
+            context.user_data["date"] = {"year":now.year,"month":now.month}
+            context.user_data["last_markup_id"] = context.bot.send_message(chat_id=update.effective_chat.id, text="Got it!\nNow tell me when is it due?",reply_markup=InlineKeyboardMarkup(k)).message_id
+        if state == "define_time":
+            due_time = update.message.text.split(":")
+            due = datetime.datetime(int(context.user_data["date"]["year"]),int(context.user_data["date"]["month"]),int(context.user_data["date"]["day"]),hour=int(due_time[0]),minute=int(due_time[1]))
             cur.execute("INSERT INTO Tasks VALUES (?,?,?,?,?)",(update.effective_user.id,update.effective_chat.id,id(due),context.user_data["task"]["title"],pickle.dumps(due)))
             db.commit()
             db.close()
@@ -116,6 +173,7 @@ def text_handler(update,context):
             executor_dict[id(due)] = task_thread
             context.user_data.pop("state")
             context.user_data.pop("task")
+            context.user_data.pop("date")
             context.bot.send_message(chat_id=update.effective_chat.id, text="Task created with ID {}".format(id(due)))
         if state == "choose_del":
             cur.execute("SELECT * FROM Tasks WHERE User={}".format(update.effective_user.id))
@@ -128,7 +186,6 @@ def text_handler(update,context):
                     executor_dict.pop(identification)
                     context.bot.send_message(chat_id=update.effective_chat.id, text="Task deleted with ID {}".format(identification))
                     break
-
 
 def delete_task(update,context):
     db = sqlite3.connect("xobot.db")
@@ -153,6 +210,10 @@ if __name__ == "__main__":
     dispatcher.add_handler(CallbackQueryHandler(define_task,pattern="1"))
     dispatcher.add_handler(CallbackQueryHandler(show_tasks,pattern="2"))
     dispatcher.add_handler(CallbackQueryHandler(delete_task,pattern="3"))
+    dispatcher.add_handler(CallbackQueryHandler(inactive_buttons,pattern="None"))
+    dispatcher.add_handler(CallbackQueryHandler(back_calendar,pattern="previous"))
+    dispatcher.add_handler(CallbackQueryHandler(forward_calendar,pattern="next"))
+    dispatcher.add_handler(CallbackQueryHandler(pick_date,pattern="d*"))
     dispatcher.add_handler(msg_handler)
 
     updater.start_polling()
