@@ -1,6 +1,8 @@
 #!/usr/bin/python
 
 import time
+import os
+import configparser
 import concurrent.futures
 import pickle
 import sqlite3
@@ -10,9 +12,22 @@ from telegram import Update , InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CallbackContext, CommandHandler, CallbackQueryHandler, MessageHandler, Filters
 
 months = {"January": 1, "February":2, "March": 3, "April":4, "May": 5, "June": 6, "July":7, "August":8, "September":9, "October":10, "November":11, "December": 12}
-request_kargs = {"proxy_url":"http://127.0.0.1:60117"} # Hard-coded only for test
+request_kargs = {"proxy_url":"http://127.0.0.1:5000"} # Hard-coded only for test
 
-updater = Updater(token="5652106016:AAFUm4917Re2TmHpL1IZc1lPGgmPv49K3Cg", request_kwargs=request_kargs)
+if os.path.isfile("config.cfg"):
+    config = configparser.ConfigParser()
+    config.read_file(open("config.cfg"))
+    t = config["Options"]["token"]
+    updater = Updater(token=t, request_kwargs=request_kargs)
+else:
+    t = input("Enter bot token: ")
+    updater = Updater(token=t, request_kwargs=request_kargs)
+    config = configparser.ConfigParser()
+    config["Options"] = {}
+    config["Options"]["token"] = t
+    with open("config.cfg","w") as cfile:
+        config.write(cfile)
+
 
 dispatcher = updater.dispatcher
 executor = concurrent.futures.ThreadPoolExecutor()
