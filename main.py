@@ -1,5 +1,6 @@
 #!/usr/bin/python
 
+from bdb import effective
 import time
 import os
 import configparser
@@ -82,7 +83,6 @@ def define_task(update,context):
 
 def inactive_buttons(update,context):
     query = update.callback_query
-    print(query.data)
     query.answer()
 
 def show_tasks(update,context):
@@ -123,10 +123,12 @@ def calendar_markup(y,m):
 
 def pick_date(update,context):
     query = update.callback_query
-    context.user_data["date"]["day"] = query.data.replace("d","")
-    context.bot.send_message(chat_id=update.effective_chat.id,text="Great!\n What time will it end? (24-hour format e.g 13:14)")
-    context.user_data["state"] = "define_time"
-    query.answer()   
+    state = context.user_data.get("state")
+    if state == "define_date" and datetime.date(context.user_data["date"]["year"],context.user_data["date"]["month"],int(query.data.replace("d",""))) >= datetime.date.today():
+        context.user_data["date"]["day"] = query.data.replace("d","")
+        context.bot.send_message(chat_id=update.effective_chat.id,text="Great!\n What time will it end? (24-hour format e.g 13:14)")
+        context.user_data["state"] = "define_time"
+    query.answer()       
 
 def back_calendar(update,context):
     query = update.callback_query
@@ -152,6 +154,18 @@ def forward_calendar(update,context):
     k = calendar_markup(context.user_data["date"]["year"],context.user_data["date"]["month"])    
     context.bot.edit_message_reply_markup(chat_id=update.effective_chat.id,reply_markup=InlineKeyboardMarkup(k),message_id=context.user_data["last_markup_id"])
 
+def validate_time(splitted_array):
+    if len(splitted_array) != 2:
+        return False
+    try:
+        a = int(splitted_array[0])
+        b = int(splitted_array[1])
+    except:
+        return False        
+    first_condition = int(splitted_array[0]) >= 0 and int(splitted_array[0]) <= 23
+    second_condition = int(splitted_array[1]) >= 0 and int(splitted_array[1]) <= 59
+    return first_condition and second_condition    
+
 def text_handler(update,context):
     db = sqlite3.connect("xobot.db")
     cur = db.cursor()
@@ -163,9 +177,21 @@ def text_handler(update,context):
             context.user_data["task"]["title"] = update.message.text
             context.user_data["date"] = {"year":now.year,"month":now.month}
             context.user_data["last_markup_id"] = context.bot.send_message(chat_id=update.effective_chat.id, text="Got it!\nNow tell me when is it due?",reply_markup=InlineKeyboardMarkup(k)).message_id
+            context.user_data["state"] = "define_date"
+        if state == "define_date":
+            context.bot.send_message(chat_id=update.effective_chat.id,text="Invalid input! please choose date from calendar keyboard!")
         if state == "define_time":
             due_time = update.message.text.split(":")
+            if not validate_time(due_time):
+                context.bot.send_message(chat_id=update.effective_chat.id, text="Invalid time provided!")
+                return
+            now = datetime.datetime.now()          
             due = datetime.datetime(int(context.user_data["date"]["year"]),int(context.user_data["date"]["month"]),int(context.user_data["date"]["day"]),hour=int(due_time[0]),minute=int(due_time[1]))
+            if now > due:
+                k = calendar_markup(now.year,now.month)
+                context.user_data["state"] = "define_date"
+                context.user_data["last_markup_id"] = context.bot.send_message(chat_id=update.effective_chat.id, text="Invalid time provided!\nPlease choose date again",reply_markup=InlineKeyboardMarkup(k)).message_id
+                return
             cur.execute("INSERT INTO Tasks VALUES (?,?,?,?,?)",(update.effective_user.id,update.effective_chat.id,id(due),context.user_data["task"]["title"],pickle.dumps(due)))
             db.commit()
             db.close()
@@ -178,26 +204,35 @@ def text_handler(update,context):
         if state == "choose_del":
             cur.execute("SELECT * FROM Tasks WHERE User={}".format(update.effective_user.id))
             results = cur.fetchall()
+            try:
+                b = int(update.message.text)
+            except:
+                context.bot.send_message(chat_id=update.effective_chat.id, text="Please enter valid index!")
+                return    
             for ind,task in enumerate(results):
                 if str(ind) == update.message.text:
                     identification = task[2]
                     executor_dict[identification].cancel()
                     context.user_data.pop("state")
                     executor_dict.pop(identification)
+                    cur.execute("DELETE FROM Tasks WHERE id={}".format(identification))
+                    db.commit()
                     context.bot.send_message(chat_id=update.effective_chat.id, text="Task deleted with ID {}".format(identification))
                     break
 
 def delete_task(update,context):
+    state = context.user_data.get("state")
     db = sqlite3.connect("xobot.db")
     cur = db.cursor()
     query = update.callback_query
     query.answer()
-    cur.execute("SELECT * FROM Tasks WHERE User={}".format(update.effective_user.id))
-    results = cur.fetchall()
-    if results:
-        context.user_data["state"] = "choose_del"
-    for ind,task in enumerate(results):
-        context.bot.send_message(chat_id=update.effective_chat.id, text="No.{}\nTitle: {}\n Due Date: {}".format(ind,task[3],pickle.loads(task[4])))
+    if not state:
+        cur.execute("SELECT * FROM Tasks WHERE User={}".format(update.effective_user.id))
+        results = cur.fetchall()
+        if results:
+            context.user_data["state"] = "choose_del"
+        for ind,task in enumerate(results):
+            context.bot.send_message(chat_id=update.effective_chat.id, text="No.{}\nTitle: {}\n Due Date: {}".format(ind,task[3],pickle.loads(task[4])))
 
 if __name__ == "__main__":
 
